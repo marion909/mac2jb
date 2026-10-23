@@ -15,6 +15,11 @@ and [ns2jb](https://gitlab.com/pepsipu/ns2jb).
 shipped in this package. This is experimental hardware-specific software,
 not a supported general-purpose macOS USB gadget API.
 
+**This fork** adds a native macOS GUI (`gui/`) that runs the whole workflow
+from one **JAILBREAK** button, and switches the sender to a **German (QWERTZ)**
+console keyboard layout. See [macOS GUI app](#macos-gui-app) and
+[keyboard layout](#keyboard-layout).
+
 ## confirmed test machine and connection
 
 These are **results from one user's physical hardware testing**, not blanket compatibility claims.
@@ -291,10 +296,104 @@ verify the host/exploit stage automatically; it only types approved commands.
 subsequent ns2jb steps with manual controller selection on the documented physical setup.** If a USB key
 starts repeating after disconnection, unplug and reconnect the cable.
 
+## keyboard layout
+
+`sender.c` types for a **German (QWERTZ) USB keyboard layout** on the console.
+Set the Switch 2 USB keyboard language to German before sending. SmileBASIC on
+the tested console inverts Shift, so the sender inverts it for letters, digits
+and symbols (AltGr characters such as `@ [ ] | \ { } ~` are sent unchanged).
+The dead keys `^` and `` ` `` are followed by a Space so they do not combine
+with the next character. Tab is rejected because it triggers editor completion.
+
+`test-operators.c` checks the keycodes that `encode()` produces for the
+operators used by the bootstrap. Build and run it from the repository root:
+
+```sh
+make
+clang -std=c11 -D_POSIX_C_SOURCE=200809L -arch arm64 -Ivendor/libusbd/include \
+  -o test-operators test-operators.c -Lvendor/libusbd -lusbd \
+  -Wl,-rpath,@executable_path/vendor/libusbd -framework CoreFoundation -framework IOKit
+./test-operators   # prints "OK (29 cases)"
+```
+
+Users with a US console layout should use the upstream
+[cpypwn/mac2jb](https://github.com/cpypwn/mac2jb) sender instead.
+
+## macOS GUI app
+
+`gui/` contains a SwiftUI app that wraps the command-line tools. It does not
+replace them: it runs `mac2jb-send`, `scripts/host.sh` and `mac2jb-commands`
+and shows their output. The prerequisites above (Reduced Security, loaded
+`usbgadget.kext`, Node.js 22+) still apply.
+
+**Requirements:** macOS 14 or later on Apple silicon and a recent Xcode
+(the package uses Swift tools 6.4).
+
+### build and run
+
+```sh
+make                          # build mac2jb-send and mac2jb-commands first
+cd gui
+swift build -c release
+.build/release/mac2jb_gui
+```
+
+You can also open `gui/Package.swift` in Xcode and run the `mac2jb-gui`
+scheme. The app finds the repository from the location of its source files,
+so keep it inside `gui/`. To point it elsewhere, set `MAC2JB_ROOT` to the
+repository root before launching.
+
+### what the JAILBREAK button does
+
+The button is enabled only when all checks pass: `arm64`, Xcode command-line
+tools, Node.js 22+, the `usbgadget` kext loaded (`kmutil showloaded`), the
+bootstrap file, and both built senders.
+
+1. **Bootstrap.** The app asks whether to type the bootstrap again.
+   *Weiter* (continue) runs `mac2jb-send`; *Abbrechen* (cancel) skips it and
+   uses a bootstrap you already saved in the full game.
+2. **Host.** If `vendor/ns2jb/runs/mac2jb-active-connect.txt` belongs to a
+   running host, that host is reused. Otherwise the app starts
+   `scripts/host.sh` and waits up to 120 seconds for the session's
+   `V=START(...)` command.
+3. **Commands.** `mac2jb-commands` types `RUN`,
+   `REMOVE NSR,&H60000000,&H3FFFFFFF` and the current `V=START(...)`, in that
+   order. Every "press Enter" prompt from the command-line tools appears as a
+   dialog; watch the Switch screen before you confirm each step.
+4. **HBLauncher (experimental, untested).** Afterwards the app tries to run
+   [HBLauncher](https://github.com/ravensclawx/HBLauncher)'s `start.sh` with
+   the Mac's LAN address (taken from `en0`, `en1` or `en2`). It looks for
+   HBLauncher next to this repository (`../HBLauncher`); set `HBLAUNCHER_DIR`
+   to override. HBLauncher documents a Linux host and its own Pico-based
+   entry, so this step has not been shown to work with mac2jb.
+
+The ns2jb host keeps running after the commands; stop it with **Host stoppen**.
+
+### Details panel
+
+Status lights, configuration and the console are in the collapsible
+**Details** section:
+
+| setting | meaning |
+| --- | --- |
+| USB Controller | `Auto` probes `usb-drd0`, `usb-drd1`, `usb-drd3`; or pick one explicitly (sets `MAC2JB_CONTROLLER`) |
+| Delay (ms) | inter-key pacing passed as `--delay-ms`, 1–2000 ms, default 10 |
+| Bootstrap File | file typed by `mac2jb-send`, default `assets/bootstrap.bas` |
+| Console Output | live output of all stages; the copy button puts the whole log on the clipboard |
+
+### GUI status
+
+The GUI has typed the bootstrap and the three post-bootstrap commands on a
+Mac mini M4 (`Mac16,10`) through a rear USB-C port. A complete ns2jb session
+through the GUI has **not** been confirmed yet: in testing, `V=START(...)`
+answered `BOOT FAILED 2`. The upstream README notes that this stage is
+timing-sensitive and recommends restarting the console before retrying; do
+not repeat `REMOVE` in the same SmileBASIC session.
+
 ## timing and safety notes
 
 The default inter-key pacing is **50 ms**. Use `--delay-ms N` to change
-it (supported range 1–2000 ms). This setting does not control the time
+it (supported range 1–2000 ms; decimal values are accepted and rounded to whole milliseconds). This setting does not control the time
 spent inside USB write calls; in testing, settings below around 50 ms
 offered little apparent improvement and shorter values sometimes became
 unstable.
@@ -324,6 +423,8 @@ characters.
 | line breaks disappear | an earlier Shift+Home/Backspace reset deleted newlines; **do not use `--indent-reset`** |
 | compiler error at `auto_indent=0;\\n` | this occurred only in an abandoned experimental sender; use the current default `sender.c` and rebuild |
 | stuck repeating character after cancellation | key-down was delivered but key-up was missed; stop sender and disconnect/reconnect the cable |
+| wrong symbols such as `;` instead of `,` or `_` instead of `-` | the console keyboard language does not match the sender; this fork types for a **German** layout. Set the console to German, or use the upstream US sender |
+| Mac mini M4 front USB-C ports: `Failed to find gay_bowser_usbgadget` on `usb-drd2` | on `Mac16,10` the front ports (`usb-drd2`) have the device-tree property `usb-device-disable`, no USB-C port controller, and no `AppleT8132USBXDCI` device controller, so the kext has nothing to attach to. Use a rear USB-C port (`usb-drd0`, `usb-drd1` or `usb-drd3`) |
 | `mac2jb-send: no such file or directory` | run `make` from the folder containing `Makefile`, then run `./mac2jb-send` |
 
 ## development log: how we got here
@@ -374,6 +475,8 @@ A driver **loading** is not the same as a device **enumerating**, and an enumera
 Makefile                             builds both senders from source
 sender.c                             tested inherited-indentation HID sender
 commands.c                           interactive post-bootstrap command sender
+test-operators.c                     keycode regression test for sender.c
+gui/                                 SwiftUI app that runs the full workflow
 indent-test.bas                      short indentation test input
 assets/bootstrap.bas                 trimmed sendable bootstrap
 assets/bootstrap.bas.sha256          checksum of trimmed sendable bootstrap
