@@ -11,3 +11,9 @@ xcuserdata/
 
 # Per-run ns2jb session credentials and logs. Never commit.
 vendor/ns2jb/runs/
+
+# Local build outputs
+test-operators
+*.dSYM/
+gui/build/
+gui/.swiftpm/

@@ -8,7 +8,7 @@
 static const char *steps[] = {
     "RUN",
     "REMOVE NSR,&H60000000,&H3FFFFFFF",
-    NULL // Loaded from the currently running ns2jb host
+    NULL // Loaded from the currently running ns2jb host (V=START)
 };
 
 
@@ -103,12 +103,12 @@ int main(int argc, char **argv) {
         if (strcmp(argv[a], "--dry-run") == 0) dry_run=true;
         else if (strcmp(argv[a], "--delay-ms") == 0 && a+1<argc) {
             char *end=NULL;
-            long value=strtol(argv[++a], &end, 10);
+            double value=strtod(argv[++a], &end);
             if (!end || *end || value<1 || value>2000) {
                 fprintf(stderr, "delay must be between 1 and 2000 ms\n");
                 return 2;
             }
-            delay_ms=(int)value;
+            delay_ms=(int)(value+0.5);
         } else if (!strcmp(argv[a], "--help") || !strcmp(argv[a], "-h")) {
             puts("usage: ./mac2jb-commands [--dry-run] [--delay-ms N]");
             return 0;

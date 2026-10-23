@@ -77,26 +77,37 @@ static void mac2jb_auto_ready(void) {
 typedef struct { uint8_t key, mods; } Stroke;
 static volatile sig_atomic_t interrupted = 0;
 static void on_interrupt(int signal_number) { (void)signal_number; interrupted = 1; }
+// German physical keyboard layout; SmileBASIC observed Shift inversion.
 static int encode(unsigned char c, Stroke *out) {
-    out->mods = 0;
-    if (c >= 'a' && c <= 'z') { out->key = 4 + c - 'a'; out->mods = 2; return 1; }
-    if (c >= 'A' && c <= 'Z') { out->key = 4 + c - 'A'; return 1; }
-    if (c >= '1' && c <= '9') { out->key = 30 + c - '1'; return 1; }
-    if (c == '0') { out->key = 39; return 1; }
-    if (c == '\n') { out->key = 40; return 1; }
-    if (c == '\t') { out->key = 43; return 1; }
-    if (c == ' ') { out->key = 44; return 1; }
-    const char *unshifted = "-=[]\\;',./`";
-    const char *shifted   = "_+{}|:\"<>?~";
-    for (int i=0; unshifted[i]; i++) {
-        if (c == (unsigned char)unshifted[i] || c == (unsigned char)shifted[i]) {
-            static const uint8_t codes[] = {45,46,47,48,49,51,52,54,55,56,53};
-            out->key=codes[i]; out->mods=(c == (unsigned char)shifted[i])?2:0; return 1;
-        }
+    out->mods=0;
+    if(c=='\n') { out->key=40; return 1; }
+    if(c==' ') { out->key=44; return 1; }
+    if(c=='\t') return 0; // Tab invokes editor completion, not whitespace.
+    if((c>='a' && c<='z') || (c>='A' && c<='Z')) {
+        unsigned char lower=(c>='A' && c<='Z')?c+32:c;
+        out->key=4+lower-'a';
+        if(lower=='y') out->key=29;
+        if(lower=='z') out->key=28;
+        out->mods=(c>='a' && c<='z')?2:0;
+        return 1;
     }
-    const char *shift_digits = "!@#$%^&*()";
-    for (int i=0; i<10; i++) if(c == (unsigned char)shift_digits[i]) {
-        out->key=(i==9)?39:(30+i); out->mods=2; return 1;
+    if(c>='1' && c<='9') {out->key=30+c-'1'; out->mods=2; return 1;}
+    if(c=='0') {out->key=39; out->mods=2; return 1;}
+    struct Mapping { unsigned char c, key, mods; };
+    // mods describe the desired logical German modifier; invert Shift below.
+    static const struct Mapping map[]={
+        {'!',30,2},{'"',31,2},{'$',33,2},{'%',34,2},{'&',35,2},
+        {'/',36,2},{'(',37,2},{')',38,2},{'=',39,2},
+        {'?',45,2},{'`',46,2},{'+',48,0},{'*',48,2},
+        {'#',50,0},{'\'',50,2},{',',54,0},{';',54,2},
+        {'.',55,0},{':',55,2},{'-',56,2},{'_',56,0},
+        {'<',100,0},{'>',100,2},{'|',100,64},
+        {'@',20,64},{'{',36,64},{'[',37,64},{']',38,64},
+        {'}',39,64},{'\\',45,64},{'~',48,64},{'^',53,0}
+    };
+    for(size_t i=0;i<sizeof(map)/sizeof(map[0]);i++) if(c==map[i].c) {
+        out->key=map[i].key; out->mods=(map[i].mods & 64) ? map[i].mods : (map[i].mods^2);
+        if(c=='^') out->mods=0; return 1;
     }
     return 0;
 }
@@ -173,9 +184,9 @@ int main(int argc, char **argv) {
     for(int a=2;a<argc;a++) {
         if(strcmp(argv[a],"--dry-run")==0) dry=1;
         else if(strcmp(argv[a],"--delay-ms")==0 && a+1<argc) {
-            char *end=NULL; long v=strtol(argv[++a],&end,10);
+            char *end=NULL; double v=strtod(argv[++a],&end);
             if(!end || *end || v<1 || v>2000){fprintf(stderr,"Delay must be 1..2000 ms\n");return 2;}
-            delay_ms=(int)v;
+            delay_ms=(int)(v+0.5);
         } else {usage(argv[0]);return 2;}
     }
     size_t bytes=0; unsigned char *data=read_text(argv[1],&bytes); if(!data)return 1;
@@ -184,7 +195,7 @@ int main(int argc, char **argv) {
         if(data[i]=='\r' && i+1<bytes && data[i+1]=='\n')continue;
         Stroke stroke;
         if(!encode(data[i],&stroke)) {
-            fprintf(stderr,"Unsupported byte 0x%02X at offset %zu (line %zu). ASCII US keyboard layout required.\n",data[i],i,lines+1);
+            fprintf(stderr,"Unsupported byte 0x%02X at offset %zu (line %zu). German QWERTZ keyboard layout required.\n",data[i],i,lines+1);
             free(data);return 1;
         }
         characters++; if(data[i]=='\n')lines++;
@@ -274,6 +285,10 @@ int main(int argc, char **argv) {
         if(!encode(c,&key) || send_stroke(ctx,iface,ep,key.mods,key.key,delay_ms)<0) {
             fprintf(stderr,"Transfer stopped at input offset %zu; target content may be partial.\n",i-1);
             goto done;
+        }
+        // Commit German dead keys without combining with the following input.
+        if(c=='^' || c=='`') {
+            if(send_stroke(ctx,iface,ep,0,44,delay_ms)<0) goto done;
         }
         if(c=='\n') {
             sent_lines++;
